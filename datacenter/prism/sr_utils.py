@@ -22,7 +22,7 @@ def interp_dim(x, scale):
     #[x0 + s*scale for x in range()]
     return y
 
-def interp_tensor(X, scale, fill=True):
+def interp_tensor(X, scale, fill=True, how=cv2.INTER_LINEAR):
     nlt = int(X.shape[1]*scale)
     nln = int(X.shape[2]*scale)
     newshape = (X.shape[0], nlt, nln)
@@ -34,10 +34,10 @@ def interp_tensor(X, scale, fill=True):
             im[np.isnan(im)] = 0
 
         scaled_tensor[j] = cv2.resize(im, (newshape[2], newshape[1]),
-                                     interpolation=cv2.INTER_CUBIC)
+                                     interpolation=how)
     return scaled_tensor
 
-def interp_da(da, scale):
+def interp_da(da, scale, how=cv2.INTER_LINEAR):
     """
     Assume da is of dimensions ('time','lat', 'lon')
     """
@@ -48,7 +48,7 @@ def interp_da(da, scale):
     lonnew = interp_dim(da[da.dims[2]].values, scale)
 
     # lets store our interpolated data
-    scaled_tensor = interp_tensor(tensor, scale, fill=True)
+    scaled_tensor = interp_tensor(tensor, scale, fill=True, how=how)
 
     if latnew.shape[0] != scaled_tensor.shape[1]:
         raise ValueError("New shape is shitty")
@@ -56,7 +56,7 @@ def interp_da(da, scale):
     return xr.DataArray(scaled_tensor, coords=[da[da.dims[0]].values, latnew, lonnew],
                  dims=da.dims)
 
-def interp_da2d(da, scale, fillna=False):
+def interp_da2d(da, scale, fillna=False, how=cv2.INTER_LINEAR):
     """
     Assume da is of dimensions ('time','lat', 'lon')
     """
@@ -70,7 +70,7 @@ def interp_da2d(da, scale, fillna=False):
     else:
         filled = im
     scaled_tensor = cv2.resize(filled, dsize=(0,0), fx=scale, fy=scale,
-                              interpolation=cv2.INTER_CUBIC)
+                              interpolation=how)
 
     # interpolate lat and lons
     latnew = interp_dim(da[da.dims[0]].values, scale)

@@ -45,3 +45,4 @@ def convert_to_tf(inputs, elevs, labels, lats, lons, t, filename):
             }))
         writer.write(example.SerializeToString())
     writer.close()
+    print "Closed TFRecordWriter"

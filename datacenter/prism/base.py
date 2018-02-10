@@ -1,6 +1,7 @@
 import os
 import shutil
 import sys
+from datetime import datetime
 import csv
 import tempfile
 import gdal
@@ -159,9 +160,8 @@ class PrismBase(object):
         self.read_data()
 
     def _get_year_file(self):
-        print "data dir", self.data_dir
+        print "data dir", self.data_dir, self.year
         fnames = [f for f in os.listdir(self.data_dir) if str(self.year) in f]
-
         if len(fnames) == 1:
             return os.path.join(self.data_dir, fnames[0])
         elif len(fnames) == 0:
@@ -191,7 +191,9 @@ class PrismBase(object):
             self.elev['lon'] = self.highres.lon
 
 class PrismSuperRes(PrismBase):
-    def __init__(self, data_dir, year, elevation_file, var='ppt'):
+    def __init__(self, data_dir, year,
+                 elevation_file=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wcs_4km_prism.nc'),
+                 var='ppt'):
         super(PrismSuperRes, self).__init__(data_dir, year, elevation_file, var=var)
 
     def resolve_data(self, lr_km=8, hr_km=4):
@@ -228,15 +230,23 @@ class PrismSuperRes(PrismBase):
         return mask, X, Y_interp, elev
 
     def make_patches(self, save_file=None, size=50, stride=30, lr_km=8, hr_km=4):
+        if size is None:
+            return self.make_test(lr_km=lr_km, hr_km=hr_km)
+
         factor = 1.*hr_km / lr_km
         assert (size * factor) == int(size*factor)
         assert (stride * factor) == int(stride * factor)
+
         mask, da1, da2, elev = self.resolve_data(lr_km=lr_km, hr_km=hr_km)
 
         obs_lats = da2.lat.values
         obs_lons = da2.lon.values
         X = da1.values
         Y = da2.values
+        print "Max X", np.max(np.abs(X))
+        print "Max Y", np.max(np.abs(Y))
+
+        print "Shape of X", X.shape
 
         # keep elevation flexible by returning it seperately
         elev = elev.values[:Y.shape[1],:Y.shape[2],np.newaxis]
@@ -276,13 +286,12 @@ class PrismSuperRes(PrismBase):
                     times += [t]
 
         order = range(len(inputs))
-        np.random.shuffle(order)
+        #np.random.shuffle(order)
         self.inputs = np.concatenate(inputs, axis=0)[order]
         self.labels = np.concatenate(labels, axis=0)[order]
         elevs= np.concatenate(elevs, axis=0)[order]
         lats = np.vstack(lats)[order]
         lons = np.vstack(lons)[order]
-        print "Number of subimages", len(self.inputs)
         if save_file is not None:
             convert_to_tf(self.inputs, elevs, self.labels, lats, lons, np.array(times)[order], save_file)
         return dict(inputs=self.inputs, elevs=elevs, labels=self.labels,
@@ -301,15 +310,6 @@ class PrismSuperRes(PrismBase):
         lons = [da2.lon.values for i in range(Y.shape[0])]
         return dict(inputs=X, elevs=elev_arr, labels=Y, lats=lats, lons=lons, times=times)
 
-    ''' this is being replaced
-    def make_tf_test(self, save_file, lr_km=8, hr_km=4):
-        X, elev, Y, lats, lons, times = self.make_test(lr_km,hr_km)
-        order = range(Y.shape[0])
-        np.random.shuffle(order)
-        convert_to_tf(X[order], elev[order], Y[order], lats, lons,
-                     times[order], save_file)
-    '''
-
 class PrismTFPipeline:
     def __init__(self, data_dir, years=[2014],
                  elevation_file=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wcs_4km_prism.nc'),
@@ -324,62 +324,75 @@ class PrismTFPipeline:
         self.lr_km = lr_km
         self.hr_km = hr_km
 
-    def _save_patches(self, patch_size=None, stride=None):
-        patches = False
+    def get_patches(self, y, patch_size=None, stride=None):
+        year_data = {}
+        for v in self.all_vars:
+            curr_prism = PrismSuperRes(self.data_dir + '/' + v, y, self.elevation_file, var=v)
+            if patch_size != None:
+                print "making patches"
+                year_data[v] = curr_prism.make_patches(size=patch_size, stride=stride,
+                                                   lr_km=self.lr_km, hr_km=self.hr_km)
+            else:
+                year_data[v] = curr_prism.make_test(lr_km=self.lr_km, hr_km=self.hr_km)
+
+        # lets figure out which times are available for each variable
+        t = [year_data[v]['times'] for v in self.all_vars]
+        t_unique = np.unique(np.concatenate(t))
+        for v in year_data:
+            rows = np.in1d(year_data[v]['times'], t_unique)
+            for k in ['inputs', 'labels', 'times']:
+                year_data[v][k] = year_data[v][k][rows]
+
+        X = [year_data[v]['inputs'] for v in self.input_vars]
+        X = np.concatenate(X, axis=3)
+        Y = [year_data[v]['labels'] for v in self.output_vars]
+        Y = np.concatenate(Y, axis=3)
+        elevs = year_data[self.all_vars[0]]['elevs']
+        t = year_data[self.all_vars[0]]['times']
+        lats = year_data[self.all_vars[0]]['lats']
+        lons = year_data[self.all_vars[0]]['lons']
+        return X, elevs, Y, lats, lons, t
+
+    def _save_patches(self, patch_size=None, stride=None, force=False):
         if patch_size is None:
-            patch_save_dir = os.path.join(self.data_dir,"_".join(self.all_vars), 'full_image')
+            patch_save_dir = os.path.join(self.data_dir,"_".join(self.all_vars), 'full_image-%i_%i'
+                                         % (self.lr_km, self.hr_km))
         else:
             patches = True
-            patch_save_dir = os.path.join(self.data_dir,"_".join(self.all_vars), 'patch_%i' % patch_size)
+            patch_save_dir = os.path.join(self.data_dir,"_".join(self.all_vars), 'patch_%i-%i_%i' %
+                                          (patch_size, self.lr_km, self.hr_km))
         if not os.path.exists(patch_save_dir):
             os.makedirs(patch_save_dir)
+
         files = []
         for y in self.years:
-            year_data = {}
             patch_save_file = os.path.join(patch_save_dir, str(y) + '.tfrecords')
             files.append(patch_save_file)
-            if os.path.exists(patch_save_file):
+            if (os.path.exists(patch_save_file)) and (not force):
                 continue
-            for v in self.all_vars:
-                curr_prism = PrismSuperRes(self.data_dir + '/' + v, y, self.elevation_file, var=v)
-                if patches:
-                    year_data[v] = curr_prism.make_patches(size=patch_size, stride=stride,
-                                                       lr_km=self.lr_km, hr_km=self.hr_km)
-                else:
-                    year_data[v] = curr_prism.make_test(lr_km=self.lr_km, hr_km=self.hr_km)
 
-            # lets figure out which times are available for each variable
-            t = [year_data[v]['times'] for v in self.all_vars]
-            t_unique = np.unique(np.concatenate(t))
-            for v in year_data:
-                rows = np.in1d(year_data[v]['times'], t_unique)
-                for k in ['inputs', 'labels', 'times']:
-                    year_data[v][k] = year_data[v][k][rows]
-
-            X = [year_data[v]['inputs'] for v in self.input_vars]
-            X = np.concatenate(X, axis=3)
-            Y = [year_data[v]['labels'] for v in self.output_vars]
-            Y = np.concatenate(Y, axis=3)
-            elevs = year_data[self.all_vars[0]]['elevs']
-            t = year_data[self.all_vars[0]]['times']
-            lats = year_data[self.all_vars[0]]['lats']
-            lons = year_data[self.all_vars[0]]['lons']
+            X, elevs, Y, lats, lons, t = self.get_patches(y, patch_size, stride)
+            print "Shape of input", X.shape, "Shape of label", Y.shape
             convert_to_tf(X, elevs, Y, lats, lons, t, patch_save_file)
         return files
 
     def tf_patches(self, batch_size=20, patch_size=38, stride=20, scope=None,
-                  epochs=int(1e8)):
+                  epochs=int(1e10), is_training=True):
         """
         A pipeline for reading patch tf files
         """
         patch_files = self._save_patches(patch_size, stride)
         factor = 1.*self.hr_km / self.lr_km
-        lr_d = int(factor * patch_size)
+        if patch_size == None:
+            lr_shape = None
+        else:
+            lr_d = int(factor * patch_size)
+            lr_shape = [lr_d, lr_d]
         with tf.variable_scope(scope, "inputs_climate_patch"):
-            images, auxs, labels = inputs_climate(batch_size, True, epochs, patch_files,
-                            len(self.input_vars), 1, len(self.output_vars), lr_shape=[lr_d, lr_d],
+            images, auxs, labels, t = inputs_climate(batch_size, is_training, epochs, patch_files,
+                            len(self.input_vars), 1, len(self.output_vars), lr_shape=lr_shape,
                             hr_shape=[patch_size, patch_size])
-        return images, auxs, labels
+        return images, auxs, labels, t
 
     def tf_test(self, batch_size=1, scope=None, epochs=int(1e8)):
         test_files = self._save_patches()
@@ -389,7 +402,9 @@ class PrismTFPipeline:
         return images, auxs, labels, times
 
 if __name__ == "__main__":
-    years = range(1981, 2017)
-    p = PrismTFPipeline('data/', years=years, lr_km=8, hr_km=4, input_vars=['ppt', 'tmax'])
-    print p.tf_patches()
-    print p.tf_test()
+    years = [1990] # range(1981, 1986)
+    p = PrismTFPipeline('/home/tj/repos/datacenter/datacenter/prism/data/',
+                        years=years, lr_km=64, hr_km=16, input_vars=['ppt'])
+    #print p.tf_patches(patch_size=64, batch_size=1)
+    z = p.get_patches(1991, patch_size=64, stride=48)
+    print z[0].shape, np.max(np.abs(z[0])), np.max(np.abs(z[2]))
