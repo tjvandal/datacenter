@@ -1,4 +1,5 @@
 import os
+import glob
 import shutil
 import sys
 from datetime import datetime
@@ -33,11 +34,9 @@ class PrismBil:
         self.hdrname = [n for n in self.zf.namelist() if n[-4:] == '.hdr'][0]
         date = self.bilname.split("_")[-2]
         self.date = pd.to_datetime(date, format='%Y%m%d')
-        print self.date
 
     def save_temp(self):
         tmp_dir = tempfile.mkdtemp()
-        print "making temp dir", tmp_dir
         for f in [self.bilname, self.hdrname]:
             fn = os.path.join(tmp_dir, f)
             with open(fn, 'wb') as file:
@@ -126,8 +125,10 @@ def downloadPrismFtpData(parm, output_dir=os.getcwd(), timestep='monthly', years
                 dir = timestep
             dir_string = '{}/{}/{}'.format(dir, parm, year)
             remote_files = sorted(ftp.nlst(dir_string))
-            for f_string in remote_files:
-                print f_string
+            i = 0
+            while i < len(remote_files):
+                f_string = remote_files[i]
+                print(f_string)
                 f = f_string.rsplit(' ')[-1]
                 if not '_bil' in f:
                     continue
@@ -138,6 +139,12 @@ def downloadPrismFtpData(parm, output_dir=os.getcwd(), timestep='monthly', years
                 with zf.ZipFile(c) as z:
                     p = PrismBil(z)
                     xray_data.append(p.bil_to_xray())
+                if np.nanmax(np.abs(xray_data[-1].values)) > 1e20:
+                    print "Retrying download"
+                    del xray_data[-1]
+                else:
+                    i += 1
+
             ds = xr.Dataset({parm: xr.concat(xray_data, dim='time')})
             ds.to_netcdf(save_nc_file, format='NETCDF3_CLASSIC')
 
@@ -147,6 +154,13 @@ def downloadPrismFtpData(parm, output_dir=os.getcwd(), timestep='monthly', years
         ftp.close()
 
     return
+
+def _get_uncorrupted_times(da):
+    da_abs = abs(da)
+    arr = da_abs.max('lat').max('lon').values
+    idxs = np.where(arr < 1e20)[0]
+    return da.time[idxs]
+
 
 class PrismBase(object):
     def __init__(self, data_dir, year, elevation_file='wcs_4km_prism.nc', var='ppt'):
@@ -160,8 +174,8 @@ class PrismBase(object):
         self.read_data()
 
     def _get_year_file(self):
-        print "data dir", self.data_dir, self.year
         fnames = [f for f in os.listdir(self.data_dir) if str(self.year) in f]
+        print "Prism Data Files:", fnames
         if len(fnames) == 1:
             return os.path.join(self.data_dir, fnames[0])
         elif len(fnames) == 0:
@@ -173,10 +187,17 @@ class PrismBase(object):
         elif len(fnames) > 1:
             raise IndexError("Multiples files for year:%i found" % self.year)
 
+    #def _remove_corrupted_values(self, ds):
+    #    uncorrupted_times = _get_uncorrupted_times(ds[self.var])
+    #    ds = ds.sel(time=uncorrupted_times)
+    #    return ds
+
     def _read_highres(self):
         highres_file = self._get_year_file()
-        print 'highres file', highres_file
         self.highres = xr.open_dataset(highres_file)
+        #self.highres = self._remove_corrupted_values(self.highres)
+        if np.nanmax(np.abs(self.highres[self.var].values)) > 1e20:
+            raise ValueError("A large data point exists in data file %s" % highres_file)
 
     def _read_elevation(self):
         elev = xr.open_dataset(self.elevation_file)
@@ -206,7 +227,6 @@ class PrismSuperRes(PrismBase):
         scale2 = 1. * hr_km / lr_km
         factor = 1. / (scale1*scale2)
         if int(factor) != factor:
-            print "Factor =", factor
             raise ValueError("factor=lr_km/hr_km should be an integer")
 
         factor = int(factor)
@@ -225,11 +245,10 @@ class PrismSuperRes(PrismBase):
                               lon=range(0, w - w % factor))
         elev = sr_utils.interp_da2d(elev, scale1)
         mask = mask.sel(lat=Y_interp.lat, lon=Y_interp.lon, method='nearest')
-
         X = sr_utils.interp_da(Y_interp, scale2)
         return mask, X, Y_interp, elev
 
-    def make_patches(self, save_file=None, size=50, stride=30, lr_km=8, hr_km=4):
+    def make_patches(self, save_file=None, size=50, stride=30, lr_km=8, hr_km=4, shuffle=False):
         if size is None:
             return self.make_test(lr_km=lr_km, hr_km=hr_km)
 
@@ -238,15 +257,11 @@ class PrismSuperRes(PrismBase):
         assert (stride * factor) == int(stride * factor)
 
         mask, da1, da2, elev = self.resolve_data(lr_km=lr_km, hr_km=hr_km)
-
         obs_lats = da2.lat.values
         obs_lons = da2.lon.values
         X = da1.values
         Y = da2.values
-        print "Max X", np.max(np.abs(X))
-        print "Max Y", np.max(np.abs(Y))
-
-        print "Shape of X", X.shape
+        assert (np.max(np.abs(X)) < 1e20)
 
         # keep elevation flexible by returning it seperately
         elev = elev.values[:Y.shape[1],:Y.shape[2],np.newaxis]
@@ -286,7 +301,8 @@ class PrismSuperRes(PrismBase):
                     times += [t]
 
         order = range(len(inputs))
-        #np.random.shuffle(order)
+        if shuffle:
+            np.random.shuffle(order)
         self.inputs = np.concatenate(inputs, axis=0)[order]
         self.labels = np.concatenate(labels, axis=0)[order]
         elevs= np.concatenate(elevs, axis=0)[order]
@@ -331,7 +347,8 @@ class PrismTFPipeline:
             if patch_size != None:
                 print "making patches"
                 year_data[v] = curr_prism.make_patches(size=patch_size, stride=stride,
-                                                   lr_km=self.lr_km, hr_km=self.hr_km)
+                                                   lr_km=self.lr_km, hr_km=self.hr_km,
+                                                   shuffle=True)
             else:
                 year_data[v] = curr_prism.make_test(lr_km=self.lr_km, hr_km=self.hr_km)
 
@@ -353,7 +370,7 @@ class PrismTFPipeline:
         lons = year_data[self.all_vars[0]]['lons']
         return X, elevs, Y, lats, lons, t
 
-    def _save_patches(self, patch_size=None, stride=None, force=False):
+    def _save_patches(self, patch_size=None, stride=None, force=False, chunksize=20000):
         if patch_size is None:
             patch_save_dir = os.path.join(self.data_dir,"_".join(self.all_vars), 'full_image-%i_%i'
                                          % (self.lr_km, self.hr_km))
@@ -366,14 +383,28 @@ class PrismTFPipeline:
 
         files = []
         for y in self.years:
-            patch_save_file = os.path.join(patch_save_dir, str(y) + '.tfrecords')
-            files.append(patch_save_file)
-            if (os.path.exists(patch_save_file)) and (not force):
+            patch_save_file = os.path.join(patch_save_dir, str(y) + '_%i.tfrecords')
+            curr_files = glob.glob(os.path.join(patch_save_dir, str(y) + '*'))
+            if (len(curr_files) > 0) and (not force):
+                files += curr_files
+                print "found files", curr_files
                 continue
 
+            new_files = []
             X, elevs, Y, lats, lons, t = self.get_patches(y, patch_size, stride)
             print "Shape of input", X.shape, "Shape of label", Y.shape
-            convert_to_tf(X, elevs, Y, lats, lons, t, patch_save_file)
+            c = 0
+            fcount = 1
+            while c < len(X):
+                s = c + chunksize
+                print c, s
+                new_files.append(patch_save_file % fcount)
+                convert_to_tf(X[c:s], elevs[c:s], Y[c:s], lats[c:s], lons[c:s], t[c:s],
+                              new_files[-1])
+                c = s
+                fcount += 1
+            files += new_files
+
         return files
 
     def tf_patches(self, batch_size=20, patch_size=38, stride=20, scope=None,
