@@ -67,8 +67,8 @@ class PrismBil:
             #print lats[:-1] - lats[1:]
             #sys.exit()
             dr = xr.DataArray(self.data[np.newaxis, :, :],
-                              coords=dict(time=[self.date], lat=lats, lon=lons), 
-                              dims=['time', 'lat', 'lon']) 
+                              coords=dict(time=[self.date], lat=lats, lon=lons),
+                              dims=['time', 'lat', 'lon'])
         finally:
             shutil.rmtree(tmp_dir)
         return dr
@@ -128,8 +128,8 @@ def downloadPrismFtpData(parm, output_dir=os.getcwd(), timestep='monthly', years
             i = 0
             while i < len(remote_files):
                 f_string = remote_files[i]
-                print(f_string)
                 f = f_string.rsplit(' ')[-1]
+                print(i,f)
                 if not '_bil' in f:
                     continue
 
@@ -140,7 +140,6 @@ def downloadPrismFtpData(parm, output_dir=os.getcwd(), timestep='monthly', years
                     p = PrismBil(z)
                     xray_data.append(p.bil_to_xray())
                 if np.nanmax(np.abs(xray_data[-1].values)) > 1e20:
-                    print "Retrying download"
                     del xray_data[-1]
                 else:
                     i += 1
@@ -186,6 +185,7 @@ class PrismBase(object):
 
         elif len(fnames) > 1:
             raise IndexError("Multiples files for year:%i found" % self.year)
+        return
 
     #def _remove_corrupted_values(self, ds):
     #    uncorrupted_times = _get_uncorrupted_times(ds[self.var])
@@ -196,8 +196,10 @@ class PrismBase(object):
         highres_file = self._get_year_file()
         self.highres = xr.open_dataset(highres_file)
         #self.highres = self._remove_corrupted_values(self.highres)
-        if np.nanmax(np.abs(self.highres[self.var].values)) > 1e20:
-            raise ValueError("A large data point exists in data file %s" % highres_file)
+        self.highres[self.var].values[np.abs(self.highres[self.var].values) > 1e20] = np.nan
+        print self.var, np.abs(self.highres[self.var]).max(),np.nanmax(np.abs(self.highres[self.var].values)) 
+        #if np.nanmax(np.abs(self.highres[self.var].values)) > 1e20:
+        #    raise ValueError("A large data point exists in data file %s" % highres_file)
 
     def _read_elevation(self):
         elev = xr.open_dataset(self.elevation_file)
@@ -408,11 +410,11 @@ class PrismTFPipeline:
         return files
 
     def tf_patches(self, batch_size=20, patch_size=38, stride=20, scope=None,
-                  epochs=int(1e10), is_training=True):
+                  epochs=int(1e10), is_training=True, repeat=True):
         """
         A pipeline for reading patch tf files
         """
-        patch_files = self._save_patches(patch_size, stride)
+        self.patch_files = self._save_patches(patch_size, stride)
         factor = 1.*self.hr_km / self.lr_km
         if patch_size == None:
             lr_shape = None
@@ -420,9 +422,9 @@ class PrismTFPipeline:
             lr_d = int(factor * patch_size)
             lr_shape = [lr_d, lr_d]
         with tf.variable_scope(scope, "inputs_climate_patch"):
-            images, auxs, labels, t = inputs_climate(batch_size, is_training, epochs, patch_files,
+            images, auxs, labels, t = inputs_climate(batch_size, is_training, epochs, self.patch_files,
                             len(self.input_vars), 1, len(self.output_vars), lr_shape=lr_shape,
-                            hr_shape=[patch_size, patch_size])
+                            hr_shape=[patch_size, patch_size], repeat=repeat)
         return images, auxs, labels, t
 
     def tf_test(self, batch_size=1, scope=None, epochs=int(1e8)):

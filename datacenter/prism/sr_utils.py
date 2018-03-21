@@ -1,7 +1,6 @@
 import xarray as xr
 import numpy as np
 import cv2
-from scipy.misc import imresize
 import scipy.interpolate
 
 def fillmiss(x):

@@ -117,18 +117,20 @@ def read_and_decode(serialized_example, is_training, lr_d, aux_d, hr_d,
                 "lat":lat, "lon":lon, "time": features['time']}
 
 def inputs_climate(batch_size, is_training, num_epochs, filenames, lr_d,
-                   aux_d, hr_d, lr_shape=None, hr_shape=None):
+                   aux_d, hr_d, lr_shape=None, hr_shape=None, repeat=True):
     with tf.name_scope('input'), tf.device("/cpu:0"):
         _parser = lambda x: read_and_decode(x, is_training, lr_d, aux_d, hr_d,
                                            lr_shape=lr_shape, hr_shape=hr_shape)
         if is_training:
-            buffer_size = 10000
+            buffer_size = 1000
         else:
-            buffer_size = 10000
+            buffer_size = 1000
         dataset = tf.data.TFRecordDataset(filenames)
         dataset = dataset.map(_parser)
-        dataset = dataset.repeat(num_epochs)
-       # dataset = dataset.repeat(1)
+        if repeat:
+            dataset = dataset.repeat(num_epochs)
+        else:
+            dataset = dataset.repeat(1)
         dataset = dataset.shuffle(buffer_size=buffer_size)
         dataset = dataset.batch(batch_size)
         iterator = dataset.make_one_shot_iterator()
