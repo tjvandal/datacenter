@@ -275,11 +275,19 @@ class PrismSuperRes(PrismBase):
         mask_vars = mask.notnull().values
         land_locs = {}
         for j, t in enumerate(timevals):
-            for y in np.arange(0, Y.shape[1], stride):
-                for x in np.arange(0, Y.shape[2], stride):
-                    if ((y+size) > Y.shape[1]) or ((x+size) > Y.shape[2]):
-                        continue
+            y = 0
+            x = 0
+            lasty = False
+            lastx = False
+            while not lasty:
+                if (y+size) > Y.shape[1]:
+                    y = Y.shape[1] - size
+                    lasty = True
 
+                while not lastx:
+                    if (x+size) > Y.shape[2]:
+                        x = Y.shape[2] - size
+                        lastx = True
                     x_lr = int(x*factor)
                     y_lr = int(y*factor)
                     s_lr = int(size*factor)
@@ -288,19 +296,19 @@ class PrismSuperRes(PrismBase):
                     # are we over the ocean? 
                     #land_ratio = mask.notnull().values[y:y+size, x:x+size].mean()
                     if (x,y) not in land_locs.keys():
-                        land_locs[(x,y)] = mask_vars[y:y+size, x:x+size].mean() > 0.25
-                    if not land_locs[(x,y)]:
-                        continue
+                        land_locs[(x,y)] = mask_vars[0, y:y+size, x:x+size].mean() > 0.25
+                    if land_locs[(x,y)]:
+                        y_sub = Y[j, np.newaxis, y:y+size, x:x+size, np.newaxis]
+                        elev_sub = elev[np.newaxis,y:y+size,x:x+size,:]
 
-                    y_sub = Y[j, np.newaxis, y:y+size, x:x+size, np.newaxis]
-                    elev_sub = elev[np.newaxis,y:y+size,x:x+size,:]
-
-                    inputs += [x_sub]
-                    labels += [y_sub]
-                    elevs += [elev_sub]
-                    lats += [obs_lats[np.newaxis, y:y+size]]
-                    lons += [obs_lons[np.newaxis, x:x+size]]
-                    times += [t]
+                        inputs += [x_sub]
+                        labels += [y_sub]
+                        elevs += [elev_sub]
+                        lats += [obs_lats[np.newaxis, y:y+size]]
+                        lons += [obs_lons[np.newaxis, x:x+size]]
+                        times += [t]
+                    x += stride
+                y += stride
 
         order = range(len(inputs))
         if shuffle:
