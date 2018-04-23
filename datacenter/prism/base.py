@@ -278,12 +278,14 @@ class PrismSuperRes(PrismBase):
             y = 0
             x = 0
             lasty = False
-            lastx = False
+            doubles = 0
             while not lasty:
                 if (y+size) > Y.shape[1]:
                     y = Y.shape[1] - size
                     lasty = True
 
+                x = 0
+                lastx = False
                 while not lastx:
                     if (x+size) > Y.shape[2]:
                         x = Y.shape[2] - size
@@ -297,10 +299,10 @@ class PrismSuperRes(PrismBase):
                     #land_ratio = mask.notnull().values[y:y+size, x:x+size].mean()
                     if (x,y) not in land_locs.keys():
                         land_locs[(x,y)] = mask_vars[0, y:y+size, x:x+size].mean() > 0.25
+
                     if land_locs[(x,y)]:
                         y_sub = Y[j, np.newaxis, y:y+size, x:x+size, np.newaxis]
                         elev_sub = elev[np.newaxis,y:y+size,x:x+size,:]
-
                         inputs += [x_sub]
                         labels += [y_sub]
                         elevs += [elev_sub]
@@ -380,7 +382,7 @@ class PrismTFPipeline:
         lons = year_data[self.all_vars[0]]['lons']
         return X, elevs, Y, lats, lons, t
 
-    def _save_patches(self, patch_size=None, stride=None, force=False, chunksize=20000):
+    def _save_patches(self, patch_size=None, stride=None, force=False, chunksize=10000):
         if patch_size is None:
             patch_save_dir = os.path.join(self.data_dir,"_".join(self.all_vars), 'full_image-%i_%i'
                                          % (self.lr_km, self.hr_km))
@@ -445,7 +447,8 @@ class PrismTFPipeline:
 if __name__ == "__main__":
     years = [1990] # range(1981, 1986)
     p = PrismTFPipeline('/home/tj/repos/datacenter/datacenter/prism/data/',
-                        years=years, lr_km=64, hr_km=16, input_vars=['ppt'])
+                        years=years, lr_km=16, hr_km=8, input_vars=['tmax'],
+                        output_vars=['tmax'])
     #print p.tf_patches(patch_size=64, batch_size=1)
-    z = p.get_patches(1991, patch_size=64, stride=48)
+    z = p.get_patches(1991, patch_size=38, stride=30)
     print z[0].shape, np.max(np.abs(z[0])), np.max(np.abs(z[2]))

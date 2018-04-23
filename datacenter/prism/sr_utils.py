@@ -3,14 +3,20 @@ import numpy as np
 import cv2
 import scipy.interpolate
 
-def fillmiss(x):
+def fillmiss(x, how='nearest'):
     if x.ndim != 2:
         raise ValueError("X have only 2 dimensions.")
     mask = ~np.isnan(x)
     xx, yy = np.meshgrid(np.arange(x.shape[1]), np.arange(x.shape[0]))
     xym = np.vstack( (np.ravel(xx[mask]), np.ravel(yy[mask])) ).T
     data0 = np.ravel(x[mask])
-    interp0 = scipy.interpolate.NearestNDInterpolator(xym, data0)
+    if how == 'nearest':
+        interp0 = scipy.interpolate.NearestNDInterpolator(xym, data0)
+    elif how == 'linear':
+        interp0 = scipy.interpolate.LinearNDInterpolator(xym, data0)
+    else:
+        raise ValueError(how)
+
     result0 = interp0(np.ravel(xx), np.ravel(yy)).reshape(xx.shape)
     return result0
 
@@ -29,8 +35,13 @@ def interp_tensor(X, scale, fill=True, how=cv2.INTER_LINEAR):
     for j, im in enumerate(X):
         # fill im with nearest neighbor
         if fill:
-            #im = fillmiss(im)
+            #im = fillmiss(im, how='linear')
+            #im = fillmiss(im, how='nearest')
             im[np.isnan(im)] = 0
+            #import matplotlib.pyplot as plt
+            #plt.imshow(im)
+            #plt.show()
+            #print im.shape
 
         scaled_tensor[j] = cv2.resize(im, (newshape[2], newshape[1]),
                                      interpolation=how)
