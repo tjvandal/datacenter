@@ -16,7 +16,7 @@ def _bytes_feature(value):
 def _float_feature(value):
     return tf.train.Feature(float_list=tf.train.FloatList(value=[value]))
 
-def convert_to_tf(inputs, elevs, labels, lats, lons, t, filename):
+def convert_to_tf(inputs, elevs, masks, labels, lats, lons, t, filename):
     #inputs, labels = data_transformer.transform(inputs, labels)
     writer = tf.python_io.TFRecordWriter(filename)
     n, hr_h, hr_w, hr_d = labels.shape
@@ -25,6 +25,7 @@ def convert_to_tf(inputs, elevs, labels, lats, lons, t, filename):
     for index in range(n):
         img_in = inputs[index].astype(np.float32).tostring()
         elev_in = elevs[index].astype(np.float32).tostring()
+        mask_in = masks[index].astype(np.float32).tostring()
         img_lab = labels[index].astype(np.float32).tostring()
         lat_in = lats[index].astype(np.float32).tostring()
         lon_in = lons[index].astype(np.float32).tostring()
@@ -39,6 +40,7 @@ def convert_to_tf(inputs, elevs, labels, lats, lons, t, filename):
             'label': _bytes_feature(img_lab),
             'img_in': _bytes_feature(img_in),
             'aux': _bytes_feature(elev_in),
+            'mask': _bytes_feature(mask_in),
             'lat': _bytes_feature(lat_in),
             'lon': _bytes_feature(lon_in),
             'time': _int64_feature(time_in),

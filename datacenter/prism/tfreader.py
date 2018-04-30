@@ -9,61 +9,6 @@ from tensorflow.contrib.framework.python.ops import variables
 from tensorflow.python.ops import variable_scope
 from tensorflow.python.training import moving_averages
 
-def _read_and_decode(filename_queue, is_training, lr_d, aux_d, hr_d,
-                    lr_shape=None, hr_shape=None):
-    reader = tf.TFRecordReader()
-    _, serialized_example = reader.read(filename_queue)
-    features = tf.parse_single_example(
-        serialized_example,
-        features={
-            'hr_h': tf.FixedLenFeature([], tf.int64),
-            'hr_w': tf.FixedLenFeature([], tf.int64),
-            'lr_h': tf.FixedLenFeature([], tf.int64),
-            'lr_w': tf.FixedLenFeature([], tf.int64),
-            'label': tf.FixedLenFeature([], tf.string),
-            'img_in': tf.FixedLenFeature([], tf.string),
-            'aux': tf.FixedLenFeature([], tf.string),
-            'lat': tf.FixedLenFeature([], tf.string),
-            'lon': tf.FixedLenFeature([], tf.string),
-            'time': tf.FixedLenFeature([], tf.int64)
-        })
-
-    with tf.device("/cpu:0"):
-        if is_training:
-            hr_h, hr_w = hr_shape
-            lr_h, lr_w = lr_shape
-        else:
-            hr_w = tf.cast(tf.reshape(features['hr_w'], []), tf.int32)
-            hr_h = tf.cast(tf.reshape(features['hr_h'], []), tf.int32)
-
-            lr_w = tf.cast(tf.reshape(features['lr_w'], []), tf.int32)
-            lr_h = tf.cast(tf.reshape(features['lr_h'], []), tf.int32)
-
-            #input_shape = tf.stack([lr_h, lr_w, lr_d])
-            #aux_shape = tf.stack([hr_h, hr_w, aux_d])
-            #label_shape = tf.stack([hr_h, hr_w, hr_d])
-
-        img_in = tf.decode_raw(features['img_in'], tf.float32)
-        img_in = tf.reshape(img_in, [lr_h, lr_w, lr_d])
-        img_in = tf.cast(img_in, tf.float32, name='inputs')
-
-        label = tf.decode_raw(features['label'], tf.float32)
-        label = tf.reshape(label, [hr_h, hr_w, hr_d])
-        label = tf.cast(label, tf.float32, name='label')
-
-        aux = tf.decode_raw(features['aux'], tf.float32)
-        aux = tf.reshape(aux, [hr_h, hr_w, aux_d])
-        aux = tf.cast(aux, tf.float32, name='aux')
-
-        lat = tf.decode_raw(features['lat'], tf.float32)
-        lat = tf.reshape(lat, [hr_h], name='lat')
-
-        lon = tf.decode_raw(features['lon'], tf.float32)
-        lon = tf.reshape(lon, [hr_w], name='lon')
-
-        return {"input": img_in, "aux": aux, "label": label,
-                "lat":lat, "lon":lon, "time": features['time']}
-
 def read_and_decode(serialized_example, is_training, lr_d, aux_d, hr_d,
                     lr_shape=None, hr_shape=None):
     features = tf.parse_single_example(
@@ -76,6 +21,7 @@ def read_and_decode(serialized_example, is_training, lr_d, aux_d, hr_d,
             'label': tf.FixedLenFeature([], tf.string),
             'img_in': tf.FixedLenFeature([], tf.string),
             'aux': tf.FixedLenFeature([], tf.string),
+            'mask': tf.FixedLenFeature([], tf.string),
             'lat': tf.FixedLenFeature([], tf.string),
             'lon': tf.FixedLenFeature([], tf.string),
             'time': tf.FixedLenFeature([], tf.int64)
@@ -108,13 +54,18 @@ def read_and_decode(serialized_example, is_training, lr_d, aux_d, hr_d,
         aux = tf.reshape(aux, [hr_h, hr_w, aux_d])
         aux = tf.cast(aux, tf.float32, name='aux')
 
+        mask = tf.decode_raw(features['mask'], tf.float32)
+        mask = tf.reshape(mask, [hr_h, hr_w, aux_d])
+        mask = tf.cast(mask, tf.float32, name='mask')
+
         lat = tf.decode_raw(features['lat'], tf.float32)
         lat = tf.reshape(lat, [hr_h], name='lat')
 
         lon = tf.decode_raw(features['lon'], tf.float32)
         lon = tf.reshape(lon, [hr_w], name='lon')
         return {"input": img_in, "aux": aux, "label": label,
-                "lat":lat, "lon":lon, "time": features['time']}
+                "lat":lat, "lon":lon, "time": features['time'],
+                 "mask": mask}
 
 def inputs_climate(batch_size, is_training, num_epochs, filenames, lr_d,
                    aux_d, hr_d, lr_shape=None, hr_shape=None, repeat=True):
@@ -122,20 +73,20 @@ def inputs_climate(batch_size, is_training, num_epochs, filenames, lr_d,
         _parser = lambda x: read_and_decode(x, is_training, lr_d, aux_d, hr_d,
                                            lr_shape=lr_shape, hr_shape=hr_shape)
         if is_training:
-            buffer_size = 1000
+            buffer_size = 200
         else:
-            buffer_size = 1000
-        dataset = tf.data.TFRecordDataset(filenames)
+            buffer_size = 20
+        dataset = tf.data.TFRecordDataset(filenames, buffer_size=0)
         dataset = dataset.map(_parser)
         if repeat:
             dataset = dataset.repeat(num_epochs)
         else:
             dataset = dataset.repeat(1)
-        dataset = dataset.shuffle(buffer_size=buffer_size)
+        dataset = dataset.shuffle(buffer_size=buffer_size, reshuffle_each_iteration=True)
         dataset = dataset.batch(batch_size)
         iterator = dataset.make_one_shot_iterator()
         next_element = iterator.get_next()
-        return next_element['input'], next_element['aux'], next_element['label'], next_element['time']
+        return next_element['input'], next_element['aux'], next_element['mask'], next_element['label'], next_element['time']
 
 
 def fill_na(x, fillval=0):
